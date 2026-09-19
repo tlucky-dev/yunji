@@ -1,0 +1,31 @@
+{
+  "name": "yunji-dl",
+  "version": "1.0.0",
+  "description": "云集（yunji）命令行视频下载器：解析剧集页面，定位 m3u8 资源，分段下载并合并为 mp4（仅供个人学习使用）",
+  "type": "module",
+  "bin": {
+    "yunji": "bin/yunji.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts",
+    "test": "tsc && node --test \"dist/test/*.test.js\"",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.11.0",
+    "@types/node": "^22.7.0",
+    "eslint": "^9.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.8.0"
+  },
+  "license": "MIT"
+}

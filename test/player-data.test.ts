@@ -78,6 +78,21 @@ describe('maccms-stui 适配器', () => {
     assert.equal(blocks[1]!.label, '索尼云播');
   });
 
+  it('parseSourceBlocks 通用兜底：空 href 的 UI 链接（如“清空”）不冒充选集', () => {
+    const html = `
+<div id="ewave-playlist-13" class="ewave-playlist-content">
+  <a class="historyclean text-muted pull-right" href="">清空</a>
+  <a href="/play/16787-3-1.html">第01集</a>
+  <a href="/play/16787-3-2.html">第02集</a>
+</div>`;
+    const $ = cheerio.load(html);
+    const blocks = parseSourceBlocks($, 'https://www.8090hub.cc/play/16787-3-1.html');
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]!.episodes.length, 2);
+    assert.equal(blocks[0]!.episodes[0]!.label, '第01集'); // 未被「清空」抢占
+    assert.ok(!blocks[0]!.episodes.some((e) => e.label === '清空'));
+  });
+
   it('toAbsoluteUrl 处理协议相对与相对路径', () => {
     const base = 'https://s.com/yun/1-1-1.html';
     assert.equal(toAbsoluteUrl('//cdn.com/a.m3u8', base), 'https://cdn.com/a.m3u8');

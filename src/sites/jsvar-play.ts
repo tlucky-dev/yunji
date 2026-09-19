@@ -21,7 +21,7 @@ import type {
   SiteContext,
   SeriesInfo,
 } from '../core/models.js';
-import { extractPlayerData, toAbsoluteUrl } from './maccms-stui.js';
+import { extractPlayerData, extractSeriesTitle, isUiAnchor, toAbsoluteUrl } from './maccms-stui.js';
 
 /** 已确认适配的站点；此类路由 /movie/{id}/{id}.html 太常见，仅按站点名单启用 */
 const KNOWN_HOSTS = new Set(['mengnijia.com', 'www.mengnijia.com']);
@@ -56,6 +56,7 @@ export function collectJsEpisodeLinks($: CheerioAPI, pageUrl: string): EpisodeRe
   const byPageId = new Map<string, { ref: EpisodeRef; num: number | null }>();
   for (const a of $('a[href]').toArray()) {
     const href = $(a).attr('href') ?? '';
+    if (isUiAnchor(href)) continue;
     const abs = new URL(href, pageUrl);
     const info = parseJsPlayUrl(abs);
     if (!info || info.vodId !== base.vodId) continue;
@@ -83,13 +84,7 @@ export function collectJsEpisodeLinks($: CheerioAPI, pageUrl: string): EpisodeRe
   return raw.map((r) => r.ref).sort((a, b) => a.nid - b.nid);
 }
 
-/** 从 <title> 提取剧名：「剧名第01集-剧名免费在线观看 - 站名」→「剧名」 */
-export function extractSeriesTitle(html: string): string {
-  const t = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
-  if (!t) return '';
-  const cut = t.replace(/第\d+[集话期][\s\S]*$/, '').trim();
-  return cut.replace(/[-_|·]\s*$/, '').trim();
-}
+// extractSeriesTitle 已上移到 maccms-stui（供两个适配器共用，含更完整的标题剥离规则）
 
 /**
  * 从播放页 HTML 定位 m3u8：

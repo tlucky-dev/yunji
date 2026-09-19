@@ -216,11 +216,10 @@ export class MultiEpisodeProgressRenderer {
 
   #eraseBlock(): void {
     if (this.#rows === 0) return;
+    // 光标回到块首并从那里清到屏幕末尾：日志与重画将从块首无缝填充。
+    // 若只清行而把光标留在块底，日志上方的被清行没人填，每合并一集会留 (并发数-1) 个空行。
     this.#write(`\x1b[${this.#rows}A`);
-    for (let i = 0; i < this.#rows; i++) {
-      const last = i === this.#rows - 1;
-      this.#write(`\x1b[1G\x1b[K${last ? '' : '\n'}`);
-    }
+    this.#write('\x1b[J');
     this.#rows = 0;
   }
 

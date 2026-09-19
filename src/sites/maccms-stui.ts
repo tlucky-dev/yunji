@@ -157,6 +157,28 @@ export function toAbsoluteUrl(raw: string, baseUrl: string): string {
   }
 }
 
+/** UI 控制链接（空 href、纯锚点）解析后恰好等于当前页地址，会冒充播放链接，一律跳过 */
+/** UI 控制链接（空 href、纯锚点）解析后恰好等于当前页地址，会冒充播放链接，一律跳过 */
+export function isUiAnchor(href: string): boolean {
+  const trimmed = href.trim();
+  return trimmed === '' || trimmed.startsWith('#');
+}
+
+/**
+ * 从 <title> 提取剧名：「《大奉打更人》剧集第01集免费在线播放_8090电影网」→「大奉打更人」。
+ * 逐级剥离集号后缀、片源常用修饰词、站名分隔符与书名号。
+ */
+export function extractSeriesTitle(html: string): string {
+  const t = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
+  if (!t) return '';
+  let cut = t.replace(/第\d+[集话期][\s\S]*$/, '').trim();
+  cut = cut.replace(/(?:剧集|电视剧|全集|正片|高清|完整版|在线播放|在线观看|免费观看|免费在线观看)+$/, '').trim();
+  cut = cut.replace(/[-_|·]\s*$/, '').trim();
+  const wrapped = /^《(.+)》$/.exec(cut);
+  if (wrapped) cut = wrapped[1]!.trim();
+  return cut;
+}
+
 /** 解析并解密播放页内嵌的播放数据；stui 模板为 player_data，原生/ewave 模板为 player_aaaa */
 export function extractPlayerData(html: string, pageUrl: string): PlayerData {
   let raw: PlayerData | null = null;
@@ -198,7 +220,7 @@ function parseStuiSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[] {
     const episodes: EpisodeRef[] = [];
     $links.each((_, a) => {
       const href = $(a).attr('href');
-      if (!href) return;
+      if (!href || isUiAnchor(href)) return;
       const ep = parsePlayUrl(new URL(href, pageUrl));
       if (!ep || seenNids.has(ep.nid)) return;
       seenNids.add(ep.nid);
@@ -238,6 +260,7 @@ function parseGenericSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[]
   const bySid = new Map<number, { seenNids: Set<number>; episodes: EpisodeRef[] }>();
   for (const a of $('a[href]').toArray()) {
     const href = $(a).attr('href') ?? '';
+    if (isUiAnchor(href)) continue;
     const info = parsePlayUrl(new URL(href, pageUrl));
     if (!info || info.vodId !== base.vodId) continue;
     const label = $(a).text().trim();
@@ -305,6 +328,7 @@ export class MaccmsStuiAdapter implements SiteAdapter {
     const firstLinkBySid = new Map<number, string>();
     for (const a of $('a[href]').toArray()) {
       const href = $(a).attr('href') ?? '';
+      if (isUiAnchor(href)) continue;
       const info = parsePlayUrl(new URL(href, url.href));
       if (!info) continue;
       if (!firstLinkBySid.has(info.sid)) {
@@ -379,7 +403,8 @@ export class MaccmsStuiAdapter implements SiteAdapter {
       }
     }
 
-    const title = playerData.vod_data?.vod_name?.trim() || `vod-${play.vodId}`;
+    const title =
+      playerData.vod_data?.vod_name?.trim() || extractSeriesTitle(html) || `vod-${play.vodId}`;
     let block = blocks.find((b) => b.sid === playerData.sid);
     if (!block) {
       // 兜底：包含当前页面路径的块，或第一个块

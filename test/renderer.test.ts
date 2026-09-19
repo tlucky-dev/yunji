@@ -26,7 +26,7 @@ describe('分集进度块渲染协议（TTY）', () => {
     assert.ok(added.includes('第01集') && added.includes('第02集'));
   });
 
-  it('remove 只擦不画：不得重画剩余行，日志行不会被后续渲染覆盖', () => {
+  it('remove 只擦不画：整块清到屏幕底、光标落块首，日志行不会被覆盖或留空行', () => {
     const w = makeWriter();
     const r = new MultiEpisodeProgressRenderer({ write: w.write, tty: true });
     r.begin(1, '第01集', 100);
@@ -36,8 +36,10 @@ describe('分集进度块渲染协议（TTY）', () => {
 
     r.remove(1);
     const erased = w.since(before);
-    assert.ok(erased.includes('\x1b['), 'remove 应输出擦除序列');
+    const esc = String.fromCharCode(27);
+    assert.ok(erased.includes(esc + '[J'), 'remove 应整块清到屏幕末尾');
     assert.ok(!erased.includes('第02集'), 'remove 不得重画剩余行（v1.3.2 回归）');
+    assert.equal(erased.replace(/[^\n]/g, ''), '', '擦除阶段不得夹带换行（否则留下空行）');
 
     // 模拟 CLI 在擦净位置打印完成日志
     w.write('✓ 第01集 → x.mp4\n');
@@ -47,7 +49,6 @@ describe('分集进度块渲染协议（TTY）', () => {
     const redrawn = w.since(logPos);
     assert.ok(redrawn.includes('第02集'), 'draw 应恢复剩余行');
     // draw 时块已清空（#rows=0），不得上移光标——上移就会覆盖刚打的日志行
-    const esc = String.fromCharCode(27);
     const moveUp = new RegExp(esc + String.raw`\[\d+A`);
     assert.ok(!moveUp.test(redrawn), 'draw 不得移动光标覆盖日志行');
   });

@@ -1,10 +1,10 @@
 import { strict as assert } from 'node:assert';
 import * as cheerio from 'cheerio';
 import { describe, it } from 'node:test';
+import { extractSeriesTitle } from '../src/sites/maccms-stui.js';
 import {
   collectJsEpisodeLinks,
   extractM3u8Url,
-  extractSeriesTitle,
   jsvarPlayAdapter,
   parseJsPlayUrl,
 } from '../src/sites/jsvar-play.js';
@@ -77,6 +77,11 @@ describe('jsvar-play 适配器', () => {
     const html = '<title>传闻中的陈芊芊第01集-传闻中的陈芊芊免费在线观看 - VS影视</title>';
     assert.equal(extractSeriesTitle(html), '传闻中的陈芊芊');
     assert.equal(extractSeriesTitle('<title>某剧第12话在线播放</title>'), '某剧');
+    // 8090hub 形态：书名号 + 「剧集」修饰 + 站点后缀
+    assert.equal(
+      extractSeriesTitle('<title>《大奉打更人》剧集第01集免费在线播放_8090电影网</title>'),
+      '大奉打更人',
+    );
     assert.equal(extractSeriesTitle('<html></html>'), '');
   });
 

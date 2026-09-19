@@ -130,5 +130,5 @@ npm run lint     # eslint
 ## 已知边界
 
 - 不处理 DRM 加密（Widevine 等）与需要第三方解密接口的站点；播放列表声明非 AES-128 加密时明确报错
-- 仅实现了 MacCMS-stui 模板适配器；其它站点在 `src/sites/` 实现 `SiteAdapter` 并注册即可
+- 仅实现了 MacCMS 系站点适配器：stui 模板（player_data）、原生/ewave 模板（player_aaaa）均已实测适配，其它 MacCMS 模板走通用链接扫描兜底；非 MacCMS 站点在 `src/sites/` 实现 `SiteAdapter` 并注册即可
 - 部分老站的选集“第X集”标签本身有误（同一集名出现两次），本工具按站点内部集号（nid）为准，文件名自动去重

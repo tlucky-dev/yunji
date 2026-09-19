@@ -84,4 +84,55 @@ describe('maccms-stui 适配器', () => {
     assert.equal(toAbsoluteUrl('/play/x/index.m3u8', base), 'https://s.com/play/x/index.m3u8');
     assert.equal(toAbsoluteUrl('https://k.com/a.m3u8', base), 'https://k.com/a.m3u8');
   });
+
+  it('extractPlayerData 回退解析 player_aaaa（原生/ewave 模板）', () => {
+    const html = `<script>var player_aaaa={"flag":"play","encrypt":0,
+"link":"/py/67184-13-1.html","link_next":"/py/67184-13-2.html",
+"vod_data":{"vod_name":"传闻中的陈芊芊"},
+"url":"https://svip.xgplay5.com/2025/index.m3u8","from":"xiguam3u8",
+"id":"67184","sid":13,"nid":1};</script>`;
+    const pageUrl = 'https://www.pdy7.com/py/67184-13-1.html';
+    const data = extractPlayerData(html, pageUrl);
+    assert.equal(data.url, 'https://svip.xgplay5.com/2025/index.m3u8');
+    assert.equal(data.vod_data?.vod_name, '传闻中的陈芊芊');
+    assert.equal(data.sid, 13);
+    assert.equal(data.nid, 1);
+  });
+
+  it('player_data 优先于 player_aaaa', () => {
+    const html = `<script>var player_data={"encrypt":0,"url":"https://a.com/data.m3u8","sid":1,"nid":1};</script>
+<script>var player_aaaa={"encrypt":0,"url":"https://b.com/aaaa.m3u8","sid":1,"nid":1};</script>`;
+    assert.equal(
+      extractPlayerData(html, 'https://s.com/p/1-1-1.html').url,
+      'https://a.com/data.m3u8',
+    );
+  });
+
+  it('parseSourceBlocks 通用兜底：同 vod 链接按 sid 分组，ewave 源名取自 data-target', () => {
+    const html = `
+<div class="playlist-tab"><ul class="swiper-wrapper">
+  <li class="swiper-slide ewave-tab" data-target="#ewave-playlist-13">西瓜<span class="badge">2</span><em></em></li>
+  <li class="swiper-slide ewave-tab" data-target="#ewave-playlist-9">天堂<span class="badge">2</span><em></em></li>
+</ul></div>
+<div id="ewave-playlist-13" class="ewave-playlist-content">
+  <a class="ewave-playlist-item" href="/py/67184-13-2.html">第02集</a>
+  <a class="ewave-playlist-item" href="/py/67184-13-1.html">第01集</a>
+  <a class="ewave-playlist-item" href="/py/67184-13-1.html">第01集</a>
+</div>
+<div id="ewave-playlist-9" class="ewave-playlist-content">
+  <a class="ewave-playlist-item" href="/py/67184-9-1.html">第01集</a>
+  <a class="ewave-playlist-item" href="/py/67184-9-2.html">第02集</a>
+</div>
+<a href="/py/99999-13-1.html">其它剧集的推荐位</a>`;
+    const $ = cheerio.load(html);
+    const blocks = parseSourceBlocks($, 'https://www.pdy7.com/py/67184-13-1.html');
+    assert.equal(blocks.length, 2);
+    const bySid = new Map(blocks.map((b) => [b.sid, b]));
+    const watermelon = bySid.get(13)!;
+    assert.equal(watermelon.label, '西瓜'); // badge 数字被去掉
+    assert.equal(watermelon.episodes.length, 2); // 重复 nid 去重
+    assert.deepEqual(watermelon.episodes.map((e) => e.nid), [1, 2]); // 不受 DOM 顺序影响
+    assert.equal(bySid.get(9)!.label, '天堂');
+    assert.equal(bySid.get(9)!.episodes[0]!.playUrl, 'https://www.pdy7.com/py/67184-9-1.html');
+  });
 });

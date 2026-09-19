@@ -1,12 +1,16 @@
 /**
- * MacCMS V10 + stui 模板站点适配器（maliys.com 即此类型）。
+ * MacCMS V10 系站点适配器，覆盖两种实测过的模板形态：
+ *
+ * ① stui 模板（maliys.com）：播放页内嵌 var player_data = {...}
+ * ② 原生 / ewave 模板（pdy7.com）：播放页内嵌 var player_aaaa = {...}（字段同构）
  *
  * 解析链路（实测验证）：
- *   播放页 /{prefix}/{vodId}-{sid}-{nid}.html 内嵌 var player_data = {...}
+ *   播放页 /{prefix}/{vodId}-{sid}-{nid}.html 内嵌播放数据
  *   ├─ url / url_next：直连 m3u8 地址（encrypt 0 明文 / 1 unescape / 2 unescape+base64）
  *   ├─ vod_data.vod_name：剧名
- *   └─ 选集列表在 .play-content .play-item 块内，每个块对应一个播放源，
- *      以块内第一个链接的 sid 区分；.play-tab 与块按下标对应提供源名。
+ *   └─ 选集列表：stui 在 .play-content .play-item 块（.play-tab 提供源名）；
+ *      其它模板走通用兜底——按同 vodId 的播放链接按 sid 分组，ewave 源名读自
+ *      li[data-target="#ewave-playlist-<sid>"]。
  * 全部源均为直连 m3u8，无第三方解析接口。
  */
 import * as cheerio from 'cheerio';
@@ -153,11 +157,18 @@ export function toAbsoluteUrl(raw: string, baseUrl: string): string {
   }
 }
 
-/** 解析并解密播放页的 player_data；不存在或字段缺失时抛错 */
+/** 解析并解密播放页内嵌的播放数据；stui 模板为 player_data，原生/ewave 模板为 player_aaaa */
 export function extractPlayerData(html: string, pageUrl: string): PlayerData {
-  const raw = extractJsObject(html, 'player_data') as PlayerData | null;
-  if (!raw || typeof raw.url !== 'string' || raw.url.length === 0) {
-    throw new Error(`页面中未找到可用的播放数据（player_data）：${pageUrl}`);
+  let raw: PlayerData | null = null;
+  for (const varName of ['player_data', 'player_aaaa']) {
+    const obj = extractJsObject(html, varName) as PlayerData | null;
+    if (obj && typeof obj.url === 'string' && obj.url.length > 0) {
+      raw = obj;
+      break;
+    }
+  }
+  if (!raw) {
+    throw new Error(`页面中未找到可用的播放数据（player_data / player_aaaa）：${pageUrl}`);
   }
   return {
     ...raw,
@@ -166,8 +177,15 @@ export function extractPlayerData(html: string, pageUrl: string): PlayerData {
   };
 }
 
-/** 解析页面上的播放源分块与其源名（.play-tab 与 .play-item 按下标对应） */
+/** 解析页面上的播放源分块与其源名；stui 专属选择器解析不到时走通用兜底 */
 export function parseSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[] {
+  const blocks = parseStuiSourceBlocks($, pageUrl);
+  if (blocks.length > 0) return blocks;
+  return parseGenericSourceBlocks($, pageUrl);
+}
+
+/** stui 模板：.play-tab 与 .play-content .play-item 按下标对应 */
+function parseStuiSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[] {
   const $tabs = $('ul.play-tab li a');
   const blocks: SourceBlock[] = [];
   $('div.play-content div.play-item').each((blockIndex, el) => {
@@ -195,6 +213,55 @@ export function parseSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[]
     const tabText = $tabs.eq(blockIndex).text().trim();
     blocks.push({ sid: first.sid, label: tabText || undefined, episodes });
   });
+  return blocks;
+}
+
+/** ewave 模板源名：li[data-target="#ewave-playlist-<sid>"] 的直接文本（去掉集数角标） */
+function parseEwaveTabLabels($: CheerioAPI): Map<number, string> {
+  const labels = new Map<number, string>();
+  $('li[data-target]').each((_, li) => {
+    const target = /ewave-playlist-(\d+)/.exec($(li).attr('data-target') ?? '');
+    if (!target) return;
+    const text = $(li).clone().children().remove().end().text().trim();
+    if (text) labels.set(Number(target[1]), text);
+  });
+  return labels;
+}
+
+/**
+ * 通用兜底（ewave 及其它未知模板）：扫描页面上同一 vod 的全部播放链接，按 sid 分组。
+ * 播放页上同 vod 的链接即选集列表（推荐位链接是其它 vod，天然被过滤）。
+ */
+function parseGenericSourceBlocks($: CheerioAPI, pageUrl: string): SourceBlock[] {
+  const base = parsePlayUrl(new URL(pageUrl));
+  if (!base) return [];
+  const bySid = new Map<number, { seenNids: Set<number>; episodes: EpisodeRef[] }>();
+  for (const a of $('a[href]').toArray()) {
+    const href = $(a).attr('href') ?? '';
+    const info = parsePlayUrl(new URL(href, pageUrl));
+    if (!info || info.vodId !== base.vodId) continue;
+    const label = $(a).text().trim();
+    // 播放页顶部的“上一集/下一集”导航按钮也指向本剧其它集，排除以免污染选集标签
+    if (/^(上一集|下一集)$/.test(label)) continue;
+    let bucket = bySid.get(info.sid);
+    if (!bucket) {
+      bucket = { seenNids: new Set<number>(), episodes: [] };
+      bySid.set(info.sid, bucket);
+    }
+    if (bucket.seenNids.has(info.nid)) continue;
+    bucket.seenNids.add(info.nid);
+    bucket.episodes.push({
+      nid: info.nid,
+      label: label || `第${pad2(info.nid)}集`,
+      playUrl: new URL(href, pageUrl).href,
+    });
+  }
+  const labels = parseEwaveTabLabels($);
+  const blocks: SourceBlock[] = [];
+  for (const [sid, { episodes }] of bySid) {
+    if (episodes.length === 0) continue;
+    blocks.push({ sid, label: labels.get(sid), episodes: episodes.sort((a, b) => a.nid - b.nid) });
+  }
   return blocks;
 }
 

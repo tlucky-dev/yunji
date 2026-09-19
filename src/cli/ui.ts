@@ -144,17 +144,27 @@ class EpisodeLineState {
  * 分集进度块：每集一行，插入顺序即开始顺序。
  * TTY 下整块原地刷新；非 TTY 下退化为周期性单行日志。
  */
+export type ErrWriter = (text: string) => void;
+
 export class MultiEpisodeProgressRenderer {
   #lines = new Map<number, EpisodeLineState>();
   /** 当前已在终端上占用的行数（光标停在块下方） */
   #rows = 0;
   #lastRender = 0;
   #active = true;
+  #write: ErrWriter;
+  #tty: boolean;
+
+  /** write/tty 可注入用于测试；默认写 stderr 并按运行环境判定 TTY */
+  constructor(opts: { write?: ErrWriter; tty?: boolean } = {}) {
+    this.#write = opts.write ?? writeErr;
+    this.#tty = opts.tty ?? isTTY;
+  }
 
   begin(nid: number, label: string, total: number): void {
     this.#lines.set(nid, new EpisodeLineState(label, total));
-    if (!isTTY) {
-      writeErr(`${label} 开始下载（共 ${total} 个分片）\n`);
+    if (!this.#tty) {
+      this.#write(`${label} 开始下载（共 ${total} 个分片）\n`);
       return;
     }
     this.#render(true);
@@ -165,12 +175,12 @@ export class MultiEpisodeProgressRenderer {
     if (!line || !this.#active) return;
     line.done = progress.done;
     line.bytes = progress.bytes;
-    if (!isTTY) {
+    if (!this.#tty) {
       line.sampleSpeed();
       const now = Date.now();
       if (progress.done >= progress.total || now - line.lastPrint >= 5000) {
         line.lastPrint = now;
-        writeErr(`${line.text()}\n`);
+        this.#write(`${line.text()}\n`);
       }
       return;
     }
@@ -181,37 +191,35 @@ export class MultiEpisodeProgressRenderer {
     this.#render(final);
   }
 
-  /** 擦除该集所在行（完成/失败后由调用方输出日志，再 draw() 恢复其余行） */
+  /**
+   * 该集完成/失败：从块中移除并擦掉整块。只擦不画——
+   * 调用方随后输出的日志落在擦净的位置，draw() 再把剩余行画到日志下方；
+   * 若在此处重画，日志行会被后续重画覆盖（v1.3.2 实测踩坑）。
+   */
   remove(nid: number): void {
     if (!this.#lines.delete(nid)) return;
-    if (!isTTY) return;
-    this.#render(true);
-  }
-
-  /** 日志输出前调用：把进度块整个擦掉，光标停在块首行 */
-  clear(): void {
-    if (!isTTY || this.#rows === 0) return;
+    if (!this.#tty) return;
     this.#eraseBlock();
   }
 
-  /** 日志输出后调用：恢复进度块 */
+  /** 日志输出后调用：在当前光标处恢复进度块 */
   draw(): void {
-    if (!isTTY || !this.#active) return;
+    if (!this.#tty || !this.#active) return;
     this.#render(true);
   }
 
   finish(): void {
     if (!this.#active) return;
     this.#active = false;
-    if (isTTY) this.#eraseBlock();
+    if (this.#tty) this.#eraseBlock();
   }
 
   #eraseBlock(): void {
     if (this.#rows === 0) return;
-    writeErr(`\x1b[${this.#rows}A`);
+    this.#write(`\x1b[${this.#rows}A`);
     for (let i = 0; i < this.#rows; i++) {
       const last = i === this.#rows - 1;
-      writeErr(`\x1b[1G\x1b[K${last ? '' : '\n'}`);
+      this.#write(`\x1b[1G\x1b[K${last ? '' : '\n'}`);
     }
     this.#rows = 0;
   }
@@ -224,14 +232,14 @@ export class MultiEpisodeProgressRenderer {
 
     const lines = [...this.#lines.values()];
     if (this.#rows > 0) {
-      writeErr(`\x1b[${this.#rows}A`);
+      this.#write(`\x1b[${this.#rows}A`);
     }
     for (const line of lines) {
-      writeErr(`\x1b[1G\x1b[K${line.text()}\n`);
+      this.#write(`\x1b[1G\x1b[K${line.text()}\n`);
     }
     if (this.#rows > lines.length) {
       // 块缩小后残留的空行清掉，光标停在块下一行
-      writeErr('\x1b[0J');
+      this.#write('\x1b[0J');
     }
     this.#rows = lines.length;
   }

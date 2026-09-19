@@ -187,19 +187,39 @@ export async function downloadSegments(opts: DownloadSegmentsOptions): Promise<D
         }, checkMs)
       : null;
 
+  const stallMessage = `下载停滞（${Math.round(stallTimeoutMs / 1000)} 秒无任何进展），已中止本集等待自动重试`;
+
   try {
-    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+    // 停滞中止后，卡死的请求可能对 abort 也不响应（服务器黑洞连接），
+    // 给 5 秒宽限仍未收尾就直接逃逸报失败，由集级重试用全新连接补试。
+    let graceTimer: NodeJS.Timeout | null = null;
+    const escaped = new Promise<never>((_, reject) => {
+      stall.signal.addEventListener(
+        'abort',
+        () => {
+          graceTimer = setTimeout(() => reject(new Error(stallMessage)), 5_000);
+        },
+        { once: true },
+      );
+    });
+    try {
+      await Promise.race([
+        Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker)),
+        escaped,
+      ]);
+    } catch (err) {
+      // 真实的分片异常原样抛出；停滞引发的一律映射为停滞报错
+      if (!stall.signal.aborted) throw err;
+    } finally {
+      if (graceTimer) clearTimeout(graceTimer);
+    }
+    if (stall.signal.aborted) throw new Error(stallMessage);
   } finally {
     if (watchdog) clearInterval(watchdog);
   }
 
   if (signal?.aborted) {
     throw new Error('已取消');
-  }
-  if (stall.signal.aborted) {
-    throw new Error(
-      `下载停滞（${Math.round(stallTimeoutMs / 1000)} 秒无任何进展），已中止本集等待自动重试`,
-    );
   }
   if (failures.length > 0) {
     const { error, job } = failures[0]!;

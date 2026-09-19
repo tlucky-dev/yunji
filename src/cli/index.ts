@@ -14,7 +14,7 @@ import '../sites/index.js';
 import { applyCliOverrides, loadConfig, userConfigDir, type YunjiConfig } from '../config.js';
 import { createPlan, createPlanFromManifest, type Plan } from '../download/planner.js';
 import { runPlan } from '../download/engine.js';
-import { MultiEpisodeProgressRenderer, createLogger, writeErr } from './ui.js';
+import { MultiEpisodeProgressRenderer, closeErr, createLogger, writeErr } from './ui.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8'),
@@ -242,4 +242,13 @@ program
     }
   });
 
-program.parseAsync();
+program
+  .parseAsync()
+  .catch((err) => {
+    createLogger().error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // 刷出渲染子进程缓冲后再退出，保证结尾日志不丢
+    closeErr();
+  });

@@ -2,19 +2,57 @@
  * CLI 界面：彩色日志与分集下载进度块。
  * 多集并行时每集占一行原地刷新；输出日志前先擦除进度块，日志后再恢复，互不踩踏。
  */
-import * as fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import type { Writable } from 'node:stream';
 import type { SegmentProgress } from '../hls/downloader.js';
 
 const isTTY = Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
 
-// Windows 控制台的 process.stderr 写入是同步的：当控制台进入文本选择状态
-// （旧版控制台“快速编辑模式”，单击窗口即可触发），写入会阻塞、整个进程冻结。
-// TTY 下改走异步流：写入由 libuv 线程池承担，选择状态只会延迟刷新，不影响下载。
-const ttyAsyncErr = isTTY ? fs.createWriteStream('', { fd: 2, autoClose: false }) : null;
+// Windows 遗留控制台的两个坑（实测踩过）：
+// ① 快速编辑模式：控制台进入文本选择状态（单击窗口即触发）时，向控制台写入会阻塞
+//    调用线程，进度渲染一写就冻结整个进程；
+// ② 绕过 TTY 直接对控制台句柄写字节（fs.createWriteStream(fd:2)）不做 UTF-16 转换，
+//    中文与 ANSI 序列全部乱码。
+// 解法：TTY 下转交给专职渲染子进程（它持有真正的 TTY stderr，编码与 ANSI 都正确），
+// 主进程只写管道——异步、带缓冲，选择状态只会让子进程排队，下载主流程不受影响。
+let ttySink: Writable | null = null;
+if (isTTY) {
+  try {
+    const child = spawn(
+      process.execPath,
+      ['-e', 'process.stdin.pipe(process.stderr)'],
+      { stdio: ['pipe', 'ignore', 'inherit'], windowsHide: true },
+    );
+    child.unref();
+    child.on('error', () => {
+      ttySink = null;
+    });
+    child.stdin!.on('error', () => {
+      // 子进程意外退出时降级为直写，避免 EPIPE 崩溃
+      ttySink = null;
+    });
+    ttySink = child.stdin!;
+  } catch {
+    ttySink = null;
+  }
+}
 
-/** stderr 统一出口；控制台场景为异步写入，避免选择状态冻结进程 */
+/** stderr 统一出口；控制台场景经渲染子进程异步写入 */
 export function writeErr(text: string): void {
-  (ttyAsyncErr ?? process.stderr).write(text);
+  if (ttySink) {
+    ttySink.write(text);
+    return;
+  }
+  process.stderr.write(text);
+}
+
+/** 进程正常结束前收口：刷出缓冲并关闭渲染子进程的输入 */
+export function closeErr(): void {
+  try {
+    if (ttySink && !ttySink.writableEnded) ttySink.end();
+  } catch {
+    // 已关闭则忽略
+  }
 }
 
 function color(code: string, text: string): string {

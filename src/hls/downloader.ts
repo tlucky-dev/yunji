@@ -28,6 +28,8 @@ export interface DownloadSegmentsOptions {
   ua: string;
   onProgress?(p: SegmentProgress): void;
   signal?: AbortSignal;
+  /** 全池无进展多少毫秒判定停滞并中止在途请求（默认 30 秒） */
+  stallTimeoutMs?: number;
 }
 
 export interface DownloadSegmentsResult {
@@ -65,10 +67,23 @@ async function writeAtomic(file: string, data: Buffer): Promise<void> {
 export async function downloadSegments(opts: DownloadSegmentsOptions): Promise<DownloadSegmentsResult> {
   const { playlist, partsDir, signal } = opts;
   const concurrency = Math.max(1, opts.concurrency);
+  const stallTimeoutMs = opts.stallTimeoutMs ?? 30_000;
   await fs.mkdir(partsDir, { recursive: true });
 
+  // 停滞看门狗：CDN 限流时可能瞬间掐断全部连接，undici 的 fetch promise 可能
+  // 永不落定、socket 句柄随之关闭，事件循环被排空会导致进程无声退出。
+  // 看门狗在「有在途请求但长时间零进展」时主动中止它们，让本集走失败重试；
+  // 定时器持有引用，也保证下载期间事件循环不会被排空。
+  const stall = new AbortController();
+  let inFlight = 0;
+  let lastActivity = Date.now();
+  const bump = () => {
+    lastActivity = Date.now();
+  };
+  const requestSignal = () => (signal ? AbortSignal.any([signal, stall.signal]) : stall.signal);
+
   const keyFetcher = new KeyFetcher((url) =>
-    httpGetBuffer(url, { ua: opts.ua, timeoutMs: opts.timeoutMs, signal }),
+    httpGetBuffer(url, { ua: opts.ua, timeoutMs: opts.timeoutMs, signal: requestSignal() }),
   );
 
   // 任务列表：init 段（若有）+ 全部分片
@@ -130,7 +145,7 @@ export async function downloadSegments(opts: DownloadSegmentsOptions): Promise<D
       timeoutMs: opts.timeoutMs,
       retries: opts.retries,
       headers,
-      signal,
+      signal: requestSignal(),
     });
     const decrypted = await job.decrypt(data);
     await writeAtomic(path.join(partsDir, job.name), decrypted);
@@ -142,20 +157,49 @@ export async function downloadSegments(opts: DownloadSegmentsOptions): Promise<D
   let cursor = 0;
   const failures: { error: Error; job: Job }[] = [];
   async function worker(): Promise<void> {
-    while (cursor < pending.length && failures.length === 0 && !signal?.aborted) {
+    while (
+      cursor < pending.length &&
+      failures.length === 0 &&
+      !signal?.aborted &&
+      !stall.signal.aborted
+    ) {
       const job = pending[cursor++]!;
+      bump();
+      inFlight++;
       try {
         await runJob(job);
       } catch (err) {
         failures.push({ error: err instanceof Error ? err : new Error(String(err)), job });
+      } finally {
+        inFlight--;
+        bump();
       }
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  const checkMs = Math.min(5_000, Math.max(200, Math.floor(stallTimeoutMs / 2)));
+  const watchdog =
+    pending.length > 0
+      ? setInterval(() => {
+          if (inFlight > 0 && Date.now() - lastActivity >= stallTimeoutMs) {
+            stall.abort();
+          }
+        }, checkMs)
+      : null;
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  } finally {
+    if (watchdog) clearInterval(watchdog);
+  }
 
   if (signal?.aborted) {
     throw new Error('已取消');
+  }
+  if (stall.signal.aborted) {
+    throw new Error(
+      `下载停滞（${Math.round(stallTimeoutMs / 1000)} 秒无任何进展），已中止本集等待自动重试`,
+    );
   }
   if (failures.length > 0) {
     const { error, job } = failures[0]!;

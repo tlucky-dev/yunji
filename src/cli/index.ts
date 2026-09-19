@@ -35,14 +35,20 @@ interface CliOptions {
   ua?: string;
 }
 
+/** 数字参数解析：非法输入（空串/非数字）回退为 undefined，取配置默认 */
+function num(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function buildConfig(opts: CliOptions): YunjiConfig {
   return applyCliOverrides(loadConfig(), {
     outputDir: opts.output,
-    concurrency: opts.concurrency !== undefined ? Number(opts.concurrency) : undefined,
-    episodeConcurrency:
-      opts.episodeConcurrency !== undefined ? Number(opts.episodeConcurrency) : undefined,
-    timeoutMs: opts.timeout !== undefined ? Number(opts.timeout) : undefined,
-    retries: opts.retries !== undefined ? Number(opts.retries) : undefined,
+    concurrency: num(opts.concurrency),
+    episodeConcurrency: num(opts.episodeConcurrency),
+    timeoutMs: num(opts.timeout),
+    retries: num(opts.retries),
     quality: opts.quality as 'highest' | 'first' | undefined,
     keepTs: opts.keepTs,
     ffmpegPath: opts.ffmpeg,
@@ -176,7 +182,7 @@ program
   .option('--list', '仅解析并列出剧集，不下载')
   .addOption(new Option('--quality <type>', '码率选择').choices(['highest', 'first']))
   .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
-  .option('--episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
+  .option('-E, --episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')
@@ -196,7 +202,7 @@ program
   .description('从已有任务清单的剧集目录恢复下载')
   .argument('<dir>', '剧集输出目录')
   .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
-  .option('--episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
+  .option('-E, --episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')

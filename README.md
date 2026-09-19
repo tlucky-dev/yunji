@@ -50,7 +50,7 @@ yunji "..." -s 红牛
 # 其他常用参数
 yunji "..." -o D:/Videos              # 输出根目录
 yunji "..." --concurrency 16          # 单集内分片并发数（默认 8）
-yunji "..." --episode-concurrency 3   # 同时下载 3 集（默认 1，逐集串行）
+yunji "..." -E 3                      # 同时下载 3 集（--episode-concurrency 短写）
 yunji "..." --quality first           # master 列表选第一个变体（默认最高码率）
 yunji "..." --keep-ts                 # 不转封装，保留 ts
 yunji "..." --ffmpeg D:/tools/ffmpeg.exe
@@ -66,7 +66,12 @@ yunji "https://cdn.example.com/play/AbCd/index.m3u8"
 
 ## 配置文件
 
-在工作目录放置 `yunji.config.json` 可持久化默认值（命令行参数优先）：
+偏好写进配置文件后，命令行就只需 `yunji <网址>`。加载优先级：
+
+**默认值 < 用户级配置 < 工作目录配置 < 命令行参数**
+
+- 用户级配置（全局生效，推荐放常用偏好）：`%APPDATA%\yunji\config.json`（Windows）或 `~/.config/yunji/config.json`
+- 工作目录配置（仅该目录生效）：`./yunji.config.json`
 
 ```json
 {

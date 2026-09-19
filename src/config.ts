@@ -1,8 +1,10 @@
 /**
- * 配置：默认值 < yunji.config.json < 命令行参数，三级覆盖。
- * 配置文件在执行命令时的工作目录下查找。
+ * 配置：默认值 < 用户级配置 < 工作目录配置 < 命令行参数，四级覆盖。
+ * 用户级配置在 %APPDATA%\yunji\config.json（Windows）或 ~/.config/yunji/config.json（其它）；
+ * 工作目录配置为执行命令时所在目录下的 yunji.config.json。
  */
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_UA } from './core/http.js';
 
@@ -42,15 +44,17 @@ export const DEFAULT_CONFIG: YunjiConfig = {
   ua: DEFAULT_UA,
 };
 
-const CONFIG_FILE_NAME = 'yunji.config.json';
+/** 用户级配置目录（跨目录运行命令时全局生效） */
+export function userConfigDir(): string {
+  const base = process.env.APPDATA || path.join(homedir(), '.config');
+  return path.join(base, 'yunji');
+}
 
-/** 读取工作目录下的 yunji.config.json（不存在返回空对象） */
-function readConfigFile(cwd: string): Partial<YunjiConfig> {
-  const file = path.join(cwd, CONFIG_FILE_NAME);
+/** 读取单个配置文件（不存在或写错返回空对象，保证不崩溃） */
+function readConfigFile(file: string): Partial<YunjiConfig> {
   try {
-    const raw = readFileSync(file, 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    // 忽略未知键与错误类型，保证配置文件写错也不至于崩溃
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Record<string, unknown>;
+    // 忽略未知键与错误类型
     const known = Object.keys(DEFAULT_CONFIG) as (keyof YunjiConfig)[];
     const result: Record<string, unknown> = {};
     for (const key of known) {
@@ -65,9 +69,13 @@ function readConfigFile(cwd: string): Partial<YunjiConfig> {
   }
 }
 
-/** 从文件加载配置并与默认值合并 */
-export function loadConfig(cwd: string = process.cwd()): YunjiConfig {
-  return { ...DEFAULT_CONFIG, ...readConfigFile(cwd) };
+/** 从用户级与工作目录加载配置并与默认值合并 */
+export function loadConfig(cwd: string = process.cwd(), userDir: string = userConfigDir()): YunjiConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    ...readConfigFile(path.join(userDir, 'config.json')),
+    ...readConfigFile(path.join(cwd, 'yunji.config.json')),
+  };
 }
 
 /** CLI 提供的可覆盖项 */

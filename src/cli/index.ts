@@ -14,7 +14,7 @@ import '../sites/index.js';
 import { applyCliOverrides, loadConfig, type YunjiConfig } from '../config.js';
 import { createPlan, createPlanFromManifest, type Plan } from '../download/planner.js';
 import { runPlan } from '../download/engine.js';
-import { EpisodeProgressRenderer, createLogger } from './ui.js';
+import { MultiEpisodeProgressRenderer, createLogger } from './ui.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8'),
@@ -26,6 +26,7 @@ interface CliOptions {
   output?: string;
   list?: boolean;
   concurrency?: string;
+  episodeConcurrency?: string;
   timeout?: string;
   retries?: string;
   quality?: string;
@@ -38,6 +39,8 @@ function buildConfig(opts: CliOptions): YunjiConfig {
   return applyCliOverrides(loadConfig(), {
     outputDir: opts.output,
     concurrency: opts.concurrency !== undefined ? Number(opts.concurrency) : undefined,
+    episodeConcurrency:
+      opts.episodeConcurrency !== undefined ? Number(opts.episodeConcurrency) : undefined,
     timeoutMs: opts.timeout !== undefined ? Number(opts.timeout) : undefined,
     retries: opts.retries !== undefined ? Number(opts.retries) : undefined,
     quality: opts.quality as 'highest' | 'first' | undefined,
@@ -92,28 +95,27 @@ function installSignalHandlers(logger: ReturnType<typeof createLogger>): AbortCo
 
 async function execute(plan: Plan, config: YunjiConfig, logger: ReturnType<typeof createLogger>): Promise<number> {
   const controller = installSignalHandlers(logger);
-  const progressRef: { current: EpisodeProgressRenderer | null } = { current: null };
+  const renderer = new MultiEpisodeProgressRenderer();
   try {
     const summary = await runPlan(plan, config, {
       log: logger,
       onEpisodeStart: (episode, totalSegments) => {
-        progressRef.current?.finish();
-        progressRef.current = new EpisodeProgressRenderer(episode.label, totalSegments);
+        renderer.begin(episode.nid, episode.label, totalSegments);
       },
-      onProgress: (_episode, p) => progressRef.current?.update(p),
+      onProgress: (episode, p) => renderer.update(episode.nid, p),
       onEpisodeMerged: (episode, outputFile) => {
-        progressRef.current?.finish();
-        progressRef.current = null;
+        renderer.remove(episode.nid);
         logger.success(`${episode.label} → ${outputFile}`);
+        renderer.draw();
       },
       onEpisodeFailed: (episode, error) => {
-        progressRef.current?.finish();
-        progressRef.current = null;
+        renderer.remove(episode.nid);
         logger.error(`${episode.label} 下载失败：${error.message}`);
+        renderer.draw();
       },
     }, controller.signal);
 
-    progressRef.current?.finish();
+    renderer.finish();
     const parts: string[] = [];
     parts.push(`完成 ${summary.merged}`);
     if (summary.skipped > 0) parts.push(`跳过已存在 ${summary.skipped}`);
@@ -125,7 +127,7 @@ async function execute(plan: Plan, config: YunjiConfig, logger: ReturnType<typeo
     if (summary.failed > 0) return 2;
     return 0;
   } finally {
-    progressRef.current?.finish();
+    renderer.finish();
     process.removeAllListeners('SIGINT');
     process.removeAllListeners('SIGTERM');
   }
@@ -173,7 +175,8 @@ program
   .option('-o, --output <dir>', '输出根目录（默认 ./downloads）')
   .option('--list', '仅解析并列出剧集，不下载')
   .addOption(new Option('--quality <type>', '码率选择').choices(['highest', 'first']))
-  .option('--concurrency <n>', '分片下载并发数')
+  .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
+  .option('--episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')
@@ -192,7 +195,8 @@ program
   .command('resume')
   .description('从已有任务清单的剧集目录恢复下载')
   .argument('<dir>', '剧集输出目录')
-  .option('--concurrency <n>', '分片下载并发数')
+  .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
+  .option('--episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')

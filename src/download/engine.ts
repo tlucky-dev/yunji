@@ -1,5 +1,6 @@
 /**
- * 下载引擎：逐集处理（解析播放列表 → 并发下载分片 → 合并 → 转封装 → 清理）。
+ * 下载引擎：解析播放列表 → 并发下载分片 → 合并 → 转封装 → 清理。
+ * 集与集之间按 episodeConcurrency 并行（默认 1 = 逐集串行）；
  * 分片级断点续传由 downloadSegments 的 .parts 跳过机制实现；
  * 集级续传由清单 status 与已存在的输出文件实现。
  */
@@ -35,6 +36,9 @@ export interface RunSummary {
   interrupted: number;
 }
 
+/** 单集处理结果；aborted 不计入 failed（属于用户中断，可续传） */
+type EpisodeOutcome = 'merged' | 'skipped' | 'failed' | 'aborted';
+
 /** 执行下载计划；signal 用于响应 Ctrl+C，中断时保留现场可续传 */
 export async function runPlan(
   plan: Plan,
@@ -54,9 +58,17 @@ export async function runPlan(
 
   const manifest: Manifest = plan.manifest;
 
-  for (const episode of plan.selected) {
-    if (signal?.aborted) break;
+  // 并行集会同时改写清单，写盘串行化，避免交错写坏 JSON；
+  // 失败只抛给触发本次保存的调用方，不阻断后续保存。
+  let saveChain: Promise<void> = Promise.resolve();
+  const saveManifestSerial = (): Promise<void> => {
+    const run = () => saveManifest(plan.seriesDir, manifest);
+    const pending = saveChain.then(run, run);
+    saveChain = pending.catch(() => undefined);
+    return pending;
+  };
 
+  const processEpisode = async (episode: ManifestEpisode): Promise<EpisodeOutcome> => {
     // 已合并且文件在 → 跳过
     if (episode.status === 'merged' && episode.outputFile) {
       const exists = await fs
@@ -64,9 +76,8 @@ export async function runPlan(
         .then((s) => s.isFile() && s.size > 0)
         .catch(() => false);
       if (exists) {
-        summary.skipped++;
         hooks.log.info(`已完成，跳过：${path.basename(episode.outputFile)}`);
-        continue;
+        return 'skipped';
       }
       hooks.log.warn(`清单标记已完成但文件缺失，重新下载：${episode.fileTitle}`);
       episode.status = 'pending';
@@ -99,7 +110,7 @@ export async function runPlan(
       });
 
       episode.status = 'downloaded';
-      await saveManifest(plan.seriesDir, manifest);
+      await saveManifestSerial();
 
       // 合并 + 转封装
       const tsPath = outputPath(plan.seriesDir, episode.fileTitle, 'ts.tmp');
@@ -123,20 +134,35 @@ export async function runPlan(
 
       episode.status = 'merged';
       episode.outputFile = outputFile;
-      await saveManifest(plan.seriesDir, manifest);
+      await saveManifestSerial();
       await cleanupParts(partsDir);
-      summary.merged++;
       hooks.onEpisodeMerged?.(episode, outputFile);
+      return 'merged';
     } catch (err) {
       if (signal?.aborted) {
         hooks.log.warn(`已中断：${episode.label}（重新执行同一命令可续传）`);
-        break;
+        return 'aborted';
       }
       const error = err instanceof Error ? err : new Error(String(err));
-      summary.failed++;
       hooks.onEpisodeFailed?.(episode, error);
+      return 'failed';
     }
-  }
+  };
+
+  const episodeConcurrency = Math.max(1, config.episodeConcurrency);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < plan.selected.length && !signal?.aborted) {
+      const episode = plan.selected[cursor++]!;
+      const outcome = await processEpisode(episode);
+      if (outcome === 'merged') summary.merged++;
+      else if (outcome === 'skipped') summary.skipped++;
+      else if (outcome === 'failed') summary.failed++;
+      else return; // aborted：本 worker 退出，剩余集计入 interrupted
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(episodeConcurrency, plan.selected.length) }, worker));
+  await saveChain;
 
   summary.interrupted = Math.max(
     0,

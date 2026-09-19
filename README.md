@@ -12,6 +12,7 @@
 - 直连 m3u8 下载，无需浏览器与第三方解析接口
 - 支持 HLS 标准：master/媒体两级播放列表、AES-128 加密（显式 IV 与按分片序号推导）、`EXT-X-MAP`（fMP4 初始化段）、`EXT-X-BYTERANGE`
 - 分片并发下载 + 重试，单集下载完后用 ffmpeg 无重编码转封装为 mp4
+- **集级并行**：`--episode-concurrency` 同时下载多集，每集一条独立进度条
 - **断点续传**：进程被杀 / Ctrl+C 中断后，重新执行同一命令自动跳过已完成分片与分集
 - 多播放源支持（`--source` 切换），Windows 非法字符文件名清洗，重复集名自动去重
 - 输出 `downloads/<剧名>/<剧名>-第01集.mp4` 结构，任务清单 `.yunji-manifest.json` 随目录保存
@@ -48,7 +49,8 @@ yunji "..." -s 红牛
 
 # 其他常用参数
 yunji "..." -o D:/Videos              # 输出根目录
-yunji "..." --concurrency 16          # 分片并发数（默认 8）
+yunji "..." --concurrency 16          # 单集内分片并发数（默认 8）
+yunji "..." --episode-concurrency 3   # 同时下载 3 集（默认 1，逐集串行）
 yunji "..." --quality first           # master 列表选第一个变体（默认最高码率）
 yunji "..." --keep-ts                 # 不转封装，保留 ts
 yunji "..." --ffmpeg D:/tools/ffmpeg.exe
@@ -70,6 +72,7 @@ yunji "https://cdn.example.com/play/AbCd/index.m3u8"
 {
   "outputDir": "D:/Videos",
   "concurrency": 12,
+  "episodeConcurrency": 3,
   "timeoutMs": 30000,
   "retries": 2,
   "quality": "highest",

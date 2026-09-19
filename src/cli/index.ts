@@ -7,18 +7,40 @@
  *   yunji <url> --list          仅列出解析结果
  *   yunji resume <剧集目录>      恢复中断的任务
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { Command, Option } from 'commander';
 import '../sites/index.js';
-import { applyCliOverrides, loadConfig, type YunjiConfig } from '../config.js';
+import { applyCliOverrides, loadConfig, userConfigDir, type YunjiConfig } from '../config.js';
 import { createPlan, createPlanFromManifest, type Plan } from '../download/planner.js';
 import { runPlan } from '../download/engine.js';
-import { MultiEpisodeProgressRenderer, createLogger } from './ui.js';
+import { MultiEpisodeProgressRenderer, createLogger, writeErr } from './ui.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8'),
 ) as { version: string };
+
+/** 致命错误落盘到用户级目录，进程异常退出时留得住现场 */
+function logCrash(kind: string, err: unknown): void {
+  const dir = userConfigDir();
+  const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  try {
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(path.join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind}: ${detail}\n`);
+  } catch {
+    // 落盘失败时至少把摘要打到终端
+  }
+  writeErr(`✗ 致命错误（${kind}），详情见 ${path.join(dir, 'crash.log')}：${detail.split('\n')[0]}\n`);
+}
+
+process.on('uncaughtException', (err) => {
+  logCrash('uncaughtException', err);
+  process.exit(3);
+});
+process.on('unhandledRejection', (reason) => {
+  logCrash('unhandledRejection', reason);
+  process.exit(3);
+});
 
 interface CliOptions {
   episodes?: string;
@@ -27,6 +49,7 @@ interface CliOptions {
   list?: boolean;
   concurrency?: string;
   episodeConcurrency?: string;
+  episodeRetries?: string;
   timeout?: string;
   retries?: string;
   quality?: string;
@@ -47,6 +70,7 @@ function buildConfig(opts: CliOptions): YunjiConfig {
     outputDir: opts.output,
     concurrency: num(opts.concurrency),
     episodeConcurrency: num(opts.episodeConcurrency),
+    episodeRetries: num(opts.episodeRetries),
     timeoutMs: num(opts.timeout),
     retries: num(opts.retries),
     quality: opts.quality as 'highest' | 'first' | undefined,
@@ -128,7 +152,7 @@ async function execute(plan: Plan, config: YunjiConfig, logger: ReturnType<typeo
     if (summary.failed > 0) parts.push(`失败 ${summary.failed}`);
     if (summary.interrupted > 0) parts.push(`未完成 ${summary.interrupted}`);
     const mark = summary.failed === 0 && summary.interrupted === 0 ? '✓' : '!';
-    process.stderr.write(`${mark} 全部结束：${parts.join('，')}\n`);
+    writeErr(`${mark} 全部结束：${parts.join('，')}\n`);
     if (summary.interrupted > 0) return 130;
     if (summary.failed > 0) return 2;
     return 0;
@@ -183,6 +207,7 @@ program
   .addOption(new Option('--quality <type>', '码率选择').choices(['highest', 'first']))
   .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
   .option('-E, --episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
+  .option('--episode-retries <n>', '失败集自动重试轮数（默认 2，间隔 20 秒）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')
@@ -203,6 +228,7 @@ program
   .argument('<dir>', '剧集输出目录')
   .option('--concurrency <n>', '单集内分片下载并发数（默认 8）')
   .option('-E, --episode-concurrency <n>', '同时下载的分集数（默认 1，逐集串行）')
+  .option('--episode-retries <n>', '失败集自动重试轮数（默认 2，间隔 20 秒）')
   .option('--timeout <ms>', '单请求超时毫秒')
   .option('--retries <n>', '请求重试次数')
   .option('--keep-ts', '不转封装，保留 ts 文件')

@@ -2,9 +2,20 @@
  * CLI 界面：彩色日志与分集下载进度块。
  * 多集并行时每集占一行原地刷新；输出日志前先擦除进度块，日志后再恢复，互不踩踏。
  */
+import * as fs from 'node:fs';
 import type { SegmentProgress } from '../hls/downloader.js';
 
 const isTTY = Boolean(process.stderr.isTTY) && !process.env.NO_COLOR;
+
+// Windows 控制台的 process.stderr 写入是同步的：当控制台进入文本选择状态
+// （旧版控制台“快速编辑模式”，单击窗口即可触发），写入会阻塞、整个进程冻结。
+// TTY 下改走异步流：写入由 libuv 线程池承担，选择状态只会延迟刷新，不影响下载。
+const ttyAsyncErr = isTTY ? fs.createWriteStream('', { fd: 2, autoClose: false }) : null;
+
+/** stderr 统一出口；控制台场景为异步写入，避免选择状态冻结进程 */
+export function writeErr(text: string): void {
+  (ttyAsyncErr ?? process.stderr).write(text);
+}
 
 function color(code: string, text: string): string {
   return isTTY ? `\x1b[${code}m${text}\x1b[0m` : text;
@@ -19,10 +30,10 @@ export interface Logger {
 
 export function createLogger(): Logger {
   return {
-    info: (msg) => process.stderr.write(`${msg}\n`),
-    success: (msg) => process.stderr.write(`${color('32', '✓')} ${msg}\n`),
-    warn: (msg) => process.stderr.write(`${color('33', '!')} ${msg}\n`),
-    error: (msg) => process.stderr.write(`${color('31', '✗')} ${color('31', msg)}\n`),
+    info: (msg) => writeErr(`${msg}\n`),
+    success: (msg) => writeErr(`${color('32', '✓')} ${msg}\n`),
+    warn: (msg) => writeErr(`${color('33', '!')} ${msg}\n`),
+    error: (msg) => writeErr(`${color('31', '✗')} ${color('31', msg)}\n`),
   };
 }
 
@@ -105,7 +116,7 @@ export class MultiEpisodeProgressRenderer {
   begin(nid: number, label: string, total: number): void {
     this.#lines.set(nid, new EpisodeLineState(label, total));
     if (!isTTY) {
-      process.stderr.write(`${label} 开始下载（共 ${total} 个分片）\n`);
+      writeErr(`${label} 开始下载（共 ${total} 个分片）\n`);
       return;
     }
     this.#render(true);
@@ -121,7 +132,7 @@ export class MultiEpisodeProgressRenderer {
       const now = Date.now();
       if (progress.done >= progress.total || now - line.lastPrint >= 5000) {
         line.lastPrint = now;
-        process.stderr.write(`${line.text()}\n`);
+        writeErr(`${line.text()}\n`);
       }
       return;
     }
@@ -159,10 +170,10 @@ export class MultiEpisodeProgressRenderer {
 
   #eraseBlock(): void {
     if (this.#rows === 0) return;
-    process.stderr.write(`\x1b[${this.#rows}A`);
+    writeErr(`\x1b[${this.#rows}A`);
     for (let i = 0; i < this.#rows; i++) {
       const last = i === this.#rows - 1;
-      process.stderr.write(`\x1b[1G\x1b[K${last ? '' : '\n'}`);
+      writeErr(`\x1b[1G\x1b[K${last ? '' : '\n'}`);
     }
     this.#rows = 0;
   }
@@ -175,14 +186,14 @@ export class MultiEpisodeProgressRenderer {
 
     const lines = [...this.#lines.values()];
     if (this.#rows > 0) {
-      process.stderr.write(`\x1b[${this.#rows}A`);
+      writeErr(`\x1b[${this.#rows}A`);
     }
     for (const line of lines) {
-      process.stderr.write(`\x1b[1G\x1b[K${line.text()}\n`);
+      writeErr(`\x1b[1G\x1b[K${line.text()}\n`);
     }
     if (this.#rows > lines.length) {
       // 块缩小后残留的空行清掉，光标停在块下一行
-      process.stderr.write('\x1b[0J');
+      writeErr('\x1b[0J');
     }
     this.#rows = lines.length;
   }

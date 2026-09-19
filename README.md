@@ -13,6 +13,8 @@
 - 支持 HLS 标准：master/媒体两级播放列表、AES-128 加密（显式 IV 与按分片序号推导）、`EXT-X-MAP`（fMP4 初始化段）、`EXT-X-BYTERANGE`
 - 分片并发下载 + 重试，单集下载完后用 ffmpeg 无重编码转封装为 mp4
 - **集级并行**：`--episode-concurrency` 同时下载多集，每集一条独立进度条
+- **失败集自动重试**：整轮跑完后对失败集自动重试（默认 2 轮，间隔 20 秒），CDN 限流抖动不再导致整季下不完
+- **控制台冻结免疫**：进度输出走异步写入，Windows 控制台“快速编辑模式”选中/单击窗口不会再冻住下载
 - **断点续传**：进程被杀 / Ctrl+C 中断后，重新执行同一命令自动跳过已完成分片与分集
 - 多播放源支持（`--source` 切换），Windows 非法字符文件名清洗，重复集名自动去重
 - 输出 `downloads/<剧名>/<剧名>-第01集.mp4` 结构，任务清单 `.yunji-manifest.json` 随目录保存
@@ -51,6 +53,7 @@ yunji "..." -s 红牛
 yunji "..." -o D:/Videos              # 输出根目录
 yunji "..." --concurrency 16          # 单集内分片并发数（默认 8）
 yunji "..." -E 3                      # 同时下载 3 集（--episode-concurrency 短写）
+yunji "..." --episode-retries 5       # 失败集自动重试 5 轮（默认 2，0 关闭）
 yunji "..." --quality first           # master 列表选第一个变体（默认最高码率）
 yunji "..." --keep-ts                 # 不转封装，保留 ts
 yunji "..." --ffmpeg D:/tools/ffmpeg.exe

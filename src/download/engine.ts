@@ -150,23 +150,58 @@ export async function runPlan(
   };
 
   const episodeConcurrency = Math.max(1, config.episodeConcurrency);
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    while (cursor < plan.selected.length && !signal?.aborted) {
-      const episode = plan.selected[cursor++]!;
-      const outcome = await processEpisode(episode);
-      if (outcome === 'merged') summary.merged++;
-      else if (outcome === 'skipped') summary.skipped++;
-      else if (outcome === 'failed') summary.failed++;
-      else return; // aborted：本 worker 退出，剩余集计入 interrupted
-    }
+
+  /** 跑一队列集，返回本轮失败的集（aborted 的不计入，由 interrupted 汇总） */
+  const runPass = async (queue: ManifestEpisode[]): Promise<ManifestEpisode[]> => {
+    const failedNow: ManifestEpisode[] = [];
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < queue.length && !signal?.aborted) {
+        const episode = queue[cursor++]!;
+        const outcome = await processEpisode(episode);
+        if (outcome === 'merged') summary.merged++;
+        else if (outcome === 'skipped') summary.skipped++;
+        else if (outcome === 'failed') failedNow.push(episode);
+        else return; // aborted：本 worker 退出
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(episodeConcurrency, queue.length) }, worker));
+    return failedNow;
   };
-  await Promise.all(Array.from({ length: Math.min(episodeConcurrency, plan.selected.length) }, worker));
+
+  // 失败集自动重试：CDN 限流/抖动通常几十秒内恢复；分片级续传保证重试只补缺口
+  let failed = await runPass(plan.selected);
+  const RETRY_DELAY_MS = 20_000;
+  let sweeps = Math.max(0, config.episodeRetries);
+  while (failed.length > 0 && sweeps > 0 && !signal?.aborted) {
+    hooks.log.warn(
+      `有 ${failed.length} 集下载失败，${Math.round(RETRY_DELAY_MS / 1000)} 秒后自动重试（剩余 ${sweeps} 轮）…`,
+    );
+    const continueRun = await sleepAbortable(RETRY_DELAY_MS, signal);
+    if (!continueRun) break;
+    sweeps--;
+    failed = await runPass(failed);
+  }
   await saveChain;
+  summary.failed = failed.length;
 
   summary.interrupted = Math.max(
     0,
     plan.selected.length - summary.merged - summary.skipped - summary.failed,
   );
   return summary;
+}
+
+/** 可被 Ctrl+C 打断的睡眠；返回 false 表示等待期间被中断 */
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (notAborted: boolean) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(notAborted);
+    };
+    const timer = setTimeout(() => finish(true), ms);
+    const onAbort = () => finish(false);
+    signal?.addEventListener('abort', onAbort);
+  });
 }

@@ -32,7 +32,7 @@ async function canRun(cmd: string): Promise<boolean> {
   });
 }
 
-/** 用 ffmpeg 将 ts 转封装为 mp4（-c copy，不重新编码） */
+/** 用 ffmpeg 将 ts 转封装为 mp4（-c copy，不重新编码）；超时强制终止，防止子进程异常挂起拖死 worker */
 export async function remuxToMp4(
   tsPath: string,
   mp4Path: string,
@@ -50,15 +50,27 @@ export async function remuxToMp4(
     '+faststart',
     mp4Path,
   ];
+  const TIMEOUT_MS = 15 * 60_000;
   const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
     const child = spawn(ffmpegPath, args, { shell: false });
     let stderr = '';
+    let settled = false;
+    const finish = (r: { code: number | null; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish({ code: -1, stderr: `${stderr}\nffmpeg 超过 15 分钟未完成，已强制终止` });
+    }, TIMEOUT_MS);
     child.stderr?.on('data', (chunk: Buffer) => {
       // 只保留尾部，避免超长日志
       stderr = (stderr + chunk.toString()).slice(-4000);
     });
-    child.on('error', (err) => resolve({ code: null, stderr: String(err) }));
-    child.on('exit', (code) => resolve({ code, stderr }));
+    child.on('error', (err) => finish({ code: null, stderr: String(err) }));
+    child.on('exit', (code) => finish({ code, stderr }));
   });
   if (result.code !== 0) {
     throw new Error(`ffmpeg 转封装失败（exit=${result.code}）：\n${result.stderr.trim()}`);

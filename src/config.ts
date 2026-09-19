@@ -15,6 +15,8 @@ export interface YunjiConfig {
   concurrency: number;
   /** 同时下载的分集数（1 为逐集串行） */
   episodeConcurrency: number;
+  /** 全部集下载完后，对失败集自动重试的轮数（间隔 20 秒，0 关闭） */
+  episodeRetries: number;
   /** 播放页解析并发数 */
   pageConcurrency: number;
   /** 单次 HTTP 超时（毫秒） */
@@ -35,6 +37,7 @@ export const DEFAULT_CONFIG: YunjiConfig = {
   outputDir: path.join(process.cwd(), 'downloads'),
   concurrency: 8,
   episodeConcurrency: 1,
+  episodeRetries: 2,
   pageConcurrency: 4,
   timeoutMs: 30_000,
   retries: 2,
@@ -83,6 +86,7 @@ export interface CliOverrides {
   outputDir?: string;
   concurrency?: number;
   episodeConcurrency?: number;
+  episodeRetries?: number;
   timeoutMs?: number;
   retries?: number;
   quality?: 'highest' | 'first';
@@ -98,6 +102,7 @@ export function applyCliOverrides(config: YunjiConfig, overrides: CliOverrides):
     ...(overrides.outputDir !== undefined && { outputDir: path.resolve(overrides.outputDir) }),
     ...(overrides.concurrency !== undefined && { concurrency: overrides.concurrency }),
     ...(overrides.episodeConcurrency !== undefined && { episodeConcurrency: overrides.episodeConcurrency }),
+    ...(overrides.episodeRetries !== undefined && { episodeRetries: overrides.episodeRetries }),
     ...(overrides.timeoutMs !== undefined && { timeoutMs: overrides.timeoutMs }),
     ...(overrides.retries !== undefined && { retries: overrides.retries }),
     ...(overrides.quality !== undefined && { quality: overrides.quality }),

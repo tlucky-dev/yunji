@@ -1,6 +1,6 @@
 {
   "name": "yunji-dl",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "云集（yunji）命令行视频下载器：解析剧集页面，定位 m3u8 资源，分段下载并合并为 mp4（仅供个人学习使用）",
   "type": "module",
   "bin": {
